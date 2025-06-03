@@ -1,11 +1,13 @@
 
 import java.io.IOException;
-import java.io.IOException;
 import java.net.InetAddress;
 import java.net.MulticastSocket;
 import java.net.DatagramPacket;
+import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.StringJoiner;
 
 /**
  * Handles mDNS (Multicast DNS) discovery and broadcasting services.
@@ -23,10 +25,10 @@ public class MDNSBroadcaster {
   private volatile boolean running;
   private MulticastSocket socket; // Socket for multicast communication
   private Thread discoveryThread; // Thread for listening for mDNS packets from other clients
-  private Thread discoveryThread; // Thread for listening for mDNS packets from other clients
   private Thread broadcastThread; // Thread for broadcasting mDNS packets
   private Thread clientConnectionManagerThread; // Thread for managing connections to discovered clients
   private List<InetAddress> clientList = new ArrayList<>(); // List of discovered client addresses
+  private RelayServer relayServer; // Local relay server for tunneling
 
   /**
    * Constructs an MDNSBroadcaster.
@@ -51,6 +53,9 @@ public class MDNSBroadcaster {
       socket.setInterface(InetAddress.getLocalHost());
       socket.joinGroup(InetAddress.getByName(GROUP_ADDRESS));
 
+      relayServer = new RelayServer();
+      relayServer.start();
+
       startDiscoveryListener();
       startMdnsBroadcast();
       startClientConnectionManager();
@@ -71,12 +76,21 @@ public class MDNSBroadcaster {
       // Loop continues as long as the broadcaster is in a running state.
       while (running) {
         try {
-          byte[] buffer = new byte[1024]; // Buffer to store incoming packet data.
+          byte[] buffer = new byte[1024];
           DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
           socket.receive(packet);
-          InetAddress sender = packet.getAddress();
-          if (sender != null && !clientList.contains(sender)) {
-            clientList.add(sender);
+
+          String msg = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+          String[] addresses = msg.split(",");
+          for (String addr : addresses) {
+            try {
+              InetAddress a = InetAddress.getByName(addr.trim());
+              if (!clientList.contains(a) && !a.equals(InetAddress.getLocalHost())) {
+                clientList.add(a);
+              }
+            } catch (UnknownHostException ignored) {
+              // Ignore malformed addresses
+            }
           }
         } catch (IOException e) {
           if (running) {
@@ -100,7 +114,12 @@ public class MDNSBroadcaster {
       // Loop continues as long as the broadcaster is in a running state.
       while (running) {
         try {
-          byte[] buffer = "Hello!".getBytes(); // The content of the broadcast packet.
+          StringJoiner joiner = new StringJoiner(",");
+          joiner.add(InetAddress.getLocalHost().getHostAddress());
+          for (InetAddress addr : new ArrayList<>(clientList)) {
+            joiner.add(addr.getHostAddress());
+          }
+          byte[] buffer = joiner.toString().getBytes(StandardCharsets.UTF_8);
           socket.send(new DatagramPacket(buffer, buffer.length, InetAddress.getByName(GROUP_ADDRESS), PORT));
           Thread.sleep(1000);
         } catch (IOException e) {
@@ -157,6 +176,10 @@ public class MDNSBroadcaster {
   public void shutdown() {
     running = false; // Signal all threads to stop their loops.
     cleanup(); // Clean up network resources like the multicast socket.
+
+    if (relayServer != null) {
+      relayServer.stop();
+    }
 
     // Interrupt each thread to wake them if they are sleeping or waiting.
     if (discoveryThread != null) {
