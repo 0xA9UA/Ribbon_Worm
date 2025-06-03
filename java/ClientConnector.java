@@ -1,9 +1,10 @@
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.Socket;
 import java.net.SocketAddress;
-import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
@@ -22,25 +23,41 @@ public class ClientConnector {
    *                   MDNSBroadcaster passes a copy of its list, so direct iteration is safe.
    */
   public static void connectToClients(List<InetAddress> clientList) {
-    // Define the SOCKS5 proxy settings. Uses localhost and a predefined PROXY_PORT.
     SocketAddress proxyAddress = new InetSocketAddress(InetAddress.getLoopbackAddress(), PROXY_PORT);
     Proxy proxy = new Proxy(Proxy.Type.SOCKS, proxyAddress);
 
-    // Iterate over the provided list of client addresses.
     for (InetAddress clientAddress : clientList) {
-      try (Socket socket = new Socket(proxy)) { // Create a new socket that connects through the proxy.
-        // Define the target client's socket address. Port 0 means any available port (standard for mDNS services not specifying one).
-        SocketAddress clientSocketAddress = new InetSocketAddress(clientAddress, 0);
-
-        // Attempt to connect to the client.
-        socket.connect(clientSocketAddress);
+      boolean connected = false;
+      try (Socket socket = new Socket(proxy)) {
+        SocketAddress target = new InetSocketAddress(clientAddress, RelayServer.RELAY_PORT);
+        socket.connect(target, 1000);
         System.out.println("Successfully connected to client: " + clientAddress);
-
-        // Placeholder for actual data exchange or further interaction with the client.
-        // e.g., socket.getOutputStream().write(...); socket.getInputStream().read(...);
+        connected = true;
       } catch (IOException e) {
-        // Log connection failures to standard error.
-        System.err.println("Failed to connect to client: " + clientAddress + ". Error: " + e.getMessage());
+        System.err.println("Direct connection to " + clientAddress + " failed: " + e.getMessage());
+      }
+
+      if (!connected) {
+        for (InetAddress relay : clientList) {
+          if (relay.equals(clientAddress)) {
+            continue;
+          }
+          try (Socket relaySocket = new Socket(proxy)) {
+            SocketAddress relayAddr = new InetSocketAddress(relay, RelayServer.RELAY_PORT);
+            relaySocket.connect(relayAddr, 1000);
+            PrintWriter out = new PrintWriter(relaySocket.getOutputStream(), true);
+            out.println(clientAddress.getHostAddress());
+            System.out.println("Connected to client " + clientAddress + " via relay " + relay);
+            connected = true;
+            break;
+          } catch (IOException e) {
+            System.err.println("Relay attempt via " + relay + " failed: " + e.getMessage());
+          }
+        }
+      }
+
+      if (!connected) {
+        System.err.println("Unable to reach client " + clientAddress + " via any known path.");
       }
     }
   }
