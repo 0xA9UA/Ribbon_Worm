@@ -2,6 +2,7 @@
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.MulticastSocket;
+import java.net.DatagramPacket;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,7 +19,7 @@ public class MDNSBroadcaster {
 	
   // Setter for stopConnect() private variable in the form of a method to be called from outside of this class. Used to stop SOCKS5 Proxy connection attempts
   public static void stopConnect() {
-    stop = true;
+    stopConnect = true;
   }
 
   public MDNSBroadcaster() {
@@ -38,8 +39,12 @@ public class MDNSBroadcaster {
           // Continuously listen for mDNS packets and add the sender's address to the client list
           while (!stop) {
             byte[] buffer = new byte[1024];
-            socket.receive(new java.net.DatagramPacket(buffer, buffer.length));
-            clientList.add(socket.getInetAddress());
+            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+            socket.receive(packet);
+            InetAddress sender = packet.getAddress();
+            if (sender != null && !clientList.contains(sender)) {
+              clientList.add(sender);
+            }
           }
         }catch (IOException e) {
           e.printStackTrace();
@@ -49,7 +54,7 @@ public class MDNSBroadcaster {
       // Continuously broadcast mDNS packets to other clients
       while (!stop) {
         byte[] buffer = "Hello!".getBytes();
-        socket.send(new java.net.DatagramPacket(buffer, buffer.length, InetAddress.getByName(GROUP_ADDRESS), PORT));
+        socket.send(new DatagramPacket(buffer, buffer.length, InetAddress.getByName(GROUP_ADDRESS), PORT));
         Thread.sleep(1000);
       }
       while (!stopConnect) {
